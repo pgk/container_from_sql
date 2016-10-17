@@ -77,9 +77,7 @@ echo "* sqldump    = ${dump_file}"
 echo "* mysql_user = ${mysql_user}"
 echo "* mysql_pass = ${mysql_pass}"
 
-mkdir -p tmp/{mysql,dump}
-
-echo "cp ${dump_file} tmp/dump/"
+mkdir -p tmp/{mysql,dump,sql_scripts}
 
 cp $dump_file tmp/dump/
 
@@ -87,11 +85,11 @@ docker-machine start
 
 eval $(docker-machine env)
 
-docker rm -f mysql
+docker rm -f $container_from_sqldump
 
-docker run --name "${container_from_sqldump}" \
+docker run --name $container_from_sqldump \
   -v $(pwd)/tmp/dump:/dump \
-  -v $(pwd)/tmp/scripts:/scripts \
+  -v $(pwd)/tmp/sql_scripts:/sql_scripts \
   -v $(pwd)/tmp/dump:/docker-entrypoint-initdb.d \
   -e MYSQL_DATABASE=wordpress \
   -e MYSQL_USER="${mysql_user}" \
@@ -100,4 +98,6 @@ docker run --name "${container_from_sqldump}" \
 
 echo "Mysql running! Attaching to container..."
 
-docker exec -i -t "${container_from_sqldump}" /bin/bash
+docker exec -i -t $container_from_sqldump /bin/bash
+
+docker kill $container_from_sqldump

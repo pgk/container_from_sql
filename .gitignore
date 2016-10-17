@@ -1,7 +1,7 @@
 .DS_Store
 tmp/mysql/*.*
 tmp/dump/*.*
-tmp/scripts/*.*
+tmp/sql_scripts/*.*
 !tmp/dump/.gitkeep
 !tmp/mysql/.gitkeep
-!tmp/scripts/.gitkeep
+!tmp/sql_scripts/.gitkeep
