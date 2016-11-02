@@ -1,3 +1,13 @@
-# ./container_from_sqldump.sh
+# Container From Sqldump
 
-Start a docker MariDB container and populates it with a .sql file
+Spin a MariaDB docker container, populate it with a WordPress database dump .sql file.
+Then massage database contents for local development (e.g. changing `guids`, `siteurl`, adding a known user)
+
+Additionally, start a WP container that uses that db
+
+Setup/Usage
+
+    virtualenv --python=python3 env
+    env/bin/pip install -r requirements.txt
+    env/bin/python main.py --help
+    env/bin/python main.py example_wp_instance <some mysqldump>.sql --plugin-repo <repo>

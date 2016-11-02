@@ -1,7 +1,14 @@
 .DS_Store
+env
+registered_containers
+registered_containers/*.*
+!registered_containers/.gitkeep
 tmp/mysql/*.*
 tmp/dump/*.*
 tmp/sql_scripts/*.*
 !tmp/dump/.gitkeep
 !tmp/mysql/.gitkeep
 !tmp/sql_scripts/.gitkeep
+docker-compose.yml
+Dockerfile
+containers.db
