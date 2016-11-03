@@ -12,12 +12,13 @@ from os.path import (
 )
 import os
 import subprocess
-from subprocess import Popen
+from subprocess import Popen, TimeoutExpired
 import shlex
 from collections import namedtuple
 from time import sleep
 from sqlalchemy import create_engine
-
+import phpserialize
+import datetime
 
 sh_quote = shlex.quote
 
@@ -93,11 +94,18 @@ def build_arg_parser():
     parser.add_argument('--mysql-root-password', dest='mysql_root_password', type=str,
                         default='root', help='Mysql Root Password')
     parser.add_argument('--wp-db-table-prefix', dest='wordpress_db_table_prefix', type=str,
-                        default='', help='Wordpress db table prefix')
+                        default='', help='Wordpress db table prefix. If you load from a .sql file that prefix will be used')
     parser.add_argument('--plugin-repo', dest='plugin_repo_path', type=str,
                         default='', help='A local or remote Git repo for wp-content')
     parser.add_argument('--wp-known-user-email', dest='wp_known_user_email', type=str,
                         default='mail@example.com', help='wp_known_user_email')
+    parser.add_argument('--wp-known-user-password', dest='wp_known_user_password', type=str,
+                        default='password', help='wp_known_user_password')
+    parser.add_argument('--wp-known-user-name', dest='wp_known_user_name', type=str,
+                        default='cuser', help='wp_known_user_name')
+    parser.add_argument('--wp-active-plugins', dest='wp_active_plugins', type=str,
+                        default='', help='comma-separated list of active plugins (make sure your wp-content contains those!)')
+
     return parser
 
 
@@ -196,7 +204,8 @@ def create_folder_structure(container_dir, dump_file):
 
 def main(args):
     args = build_arg_parser().parse_args(args)
-
+    mysql_expose_port = 6603
+    php_version = '7.1'
     container_name = args.container_name
     dump_file = args.dump_file
     mysql_user = args.mysql_user
@@ -204,9 +213,13 @@ def main(args):
     mysql_database = args.mysql_database
     mysql_root_password = args.mysql_root_password
     wordpress_db_table_prefix = args.wordpress_db_table_prefix
-    php_version = '7.1'
+
     plugin_repo_path = args.plugin_repo_path
-    mysql_expose_port = 6603
+
+    wp_active_plugins = args.wp_active_plugins
+    wp_known_user_password = args.wp_known_user_password
+    wp_known_user_name = args.wp_known_user_name
+    wp_known_user_email = args.wp_known_user_email
 
     print_version()
 
@@ -312,7 +325,9 @@ def main(args):
         import hashlib
         users_table = '{0}users'.format(wordpress_db_table_prefix)
         usermeta_table = '{0}usermeta'.format(wordpress_db_table_prefix)
-        user_email = 'panosktn@gmail.com'
+        user_email = wp_known_user_email
+        user_login = wp_known_user_name
+        user_pass = wp_known_user_password.encode('utf8')
 
         sql = """\
     INSERT INTO `{users_table}`
@@ -323,10 +338,10 @@ def main(args):
         ('{user_login}', '{user_pass}', '{user_nicename}', '{user_email}',
          'http://www.test.com/', '2011-06-07 00:00:00', '', '0', '{user_nicename}');""".format(
             users_table=users_table,
-            user_login='pgk',
-            user_pass=hashlib.md5(b'password').hexdigest(),
+            user_login=user_login,
+            user_pass=hashlib.md5(user_pass).hexdigest(),
             user_email=user_email,
-            user_nicename='pgk'
+            user_nicename=user_login
         )
         print(sql)
 
@@ -371,6 +386,13 @@ def main(args):
 
         sql = "UPDATE {wordpress_db_table_prefix}options SET option_value = 'http://{host}:{port}' WHERE option_name = 'home' OR option_name = 'siteurl'"\
             .format(host=docker_machine_ip, port='8080', wordpress_db_table_prefix=wordpress_db_table_prefix)
+        mysql_engine.execute(sql)
+        print(sql)
+
+        # a:2:{i:0;s:43:"sensei-content-drip/sensei-content-drip.php";i:1;s:37:"woothemes-sensei/woothemes-sensei.php";}
+        active_plugins_serialized = phpserialize.dumps(wp_active_plugins.split(',')).decode('utf-8')
+        sql = "UPDATE {wordpress_db_table_prefix}options SET option_value = '{active_plugins_serialized}' WHERE option_name = 'active_plugins';"\
+            .format(wordpress_db_table_prefix=wordpress_db_table_prefix, active_plugins_serialized=active_plugins_serialized)
         mysql_engine.execute(sql)
         print(sql)
 
