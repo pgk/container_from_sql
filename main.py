@@ -19,6 +19,8 @@ from time import sleep
 from sqlalchemy import create_engine
 import phpserialize
 import datetime
+import docker
+
 
 sh_quote = shlex.quote
 
@@ -145,14 +147,19 @@ def perform_input_validation(args):
 def maybe_start_docker_machine():
     platform = sys.platform
     if platform == 'darwin':
-        run('docker-machine start')
+        if run('docker-machine status default').returncode != 0:
+            run('docker-machine create --driver virtualbox default')
+
+        run('docker-machine start default')
+
         result = {}
         env_ = run('docker-machine env')
-        for line in run('docker-machine env').stdout.decode('utf-8').split('\n'):
+        print(env_.stdout)
+        for line in env_.stdout.decode('utf-8').split('\n'):
             if 'export' in line:
                 parts = line.replace('export', '').strip().split('=')
-            if len(parts) == 2:
-                result[parts[0]] = parts[1].replace('"', '')
+                if len(parts) == 2:
+                    result[parts[0]] = parts[1].replace('"', '')
         os.environ.update(result)
 
 
@@ -171,13 +178,14 @@ def add_plugin_repo(plugin_repo_path, container_dir, copy_repo=True):
             run('ln -sfF {0}/ {1}/content/'.format(sh_quote(realpath(plugin_repo_path)), sh_quote(container_dir)))
 
 
-def wait_for_mysql_to_boot(mysql_docker_container):
+def wait_for_mysql_to_boot(mysql_docker_container, cli):
     print('waiting for MariaDB server to finish booting')
-    sleep(10)
 
     for i in range(60):
-        r = run('docker logs {0}'.format(mysql_docker_container))
-        res = r.stdout.decode('utf-8')
+        # r = run('docker logs {0}'.format(mysql_docker_container))
+        r = cli.logs(mysql_docker_container)
+        print(r)
+        res = r.decode('utf-8')
         if 'MySQL init process done. Ready for start up' in res:
             return True
 
@@ -200,6 +208,12 @@ def create_folder_structure(container_dir, dump_file):
     run("cp -rf {0}/ {1}/tmp/setup_scripts/".format(sh_quote(realpath(join(ROOT_PATH, 'setup_scripts'))), sh_quote(container_dir)))
 
     run('chmod -R 0777 {0}/tmp'.format(sh_quote(container_dir)))
+
+
+def create_docker_client():
+    client = docker.from_env(assert_hostname=False)
+    print(client.version())
+    return client
 
 
 def main(args):
@@ -231,8 +245,6 @@ def main(args):
     relative_container_dir = join('registered_containers', container_name)
     container_dir = realpath(join(ROOT_PATH, relative_container_dir))
 
-    sh_quote = shlex.quote
-
     create_folder_structure(container_dir, dump_file)
 
     tpl_args = {
@@ -248,15 +260,9 @@ def main(args):
     wordpress_docker_container = '{0}_wordpress'.format(container_name)
 
     tpl = ' '.join((
-        'docker run',
-        '--name {0}'.format(mysql_docker_container),
+
         '--restart always',
-        '-e "MYSQL_ROOT_PASSWORD={mysql_root_password}" -e "MYSQL_USER={mysql_user}" -e "MYSQL_PASSWORD={mysql_password}" -e "MYSQL_DATABASE={mysql_database}" '.format(**tpl_args),
-        '-p {0}:3306 '.format(mysql_expose_port),
-        "-v {0}/tmp/sql_scripts:/sql_scripts ".format(container_dir),
-        "-v {0}/tmp/dump:/dump ".format(container_dir),
-        "-v {0}/tmp/setup_scripts:/setup_scripts ".format(container_dir),
-        '-d mariadb:latest',
+
         '--bind-address=*'
     ))
 
@@ -268,22 +274,53 @@ def main(args):
     docker_machine_ip = run('docker-machine ip').stdout.strip().decode('utf-8')
     print(docker_machine_ip)
 
-    run('docker rm -fv {0}'.format(mysql_docker_container))
+    cli = create_docker_client()
 
-    run(tpl, debug=True)
+    containers = cli.containers()
+    print(containers)
 
-    r = run('docker ps')
+    # run('docker rm -fv {0}'.format(mysql_docker_container))
+    try:
+        cli.remove_container(mysql_docker_container, force=True)
+    except docker.errors.NotFound:
+        pass
 
+    mariadb_image = 'mariadb:latest'
+    print('pulling {0}...'.format(mariadb_image))
+    cli.pull(mariadb_image)
+    print('done pulling {0}'.format(mariadb_image))
 
-    print('waiting for MariaDB server to finish booting')
-    sleep(10)
+    mysql_docker_container_instance = cli.create_container(
+        name=mysql_docker_container,
+        detach=True,
+        image=mariadb_image,
+        ports=[3306],
+        host_config=cli.create_host_config(port_bindings={
+            3306: mysql_expose_port
+        }, binds=[
+            "{0}/tmp/sql_scripts:/sql_scripts".format(container_dir),
+            "{0}/tmp/dump:/dump".format(container_dir),
+            "{0}/tmp/setup_scripts:/setup_scripts".format(container_dir),
+        ]),
+        environment={
+            'MYSQL_ROOT_PASSWORD': mysql_root_password,
+            'MYSQL_USER': mysql_user,
+            'MYSQL_PASSWORD': mysql_password,
+            'MYSQL_DATABASE':mysql_database
+        }
 
-    mysql_init_process_done = wait_for_mysql_to_boot(mysql_docker_container)
+    )
+
+    print(mysql_docker_container_instance)
+    response = cli.start(container=mysql_docker_container_instance.get('Id'))
+    print(response)
+
+    mysql_init_process_done = wait_for_mysql_to_boot(mysql_docker_container, cli)
+
     if not mysql_init_process_done:
         print('MySQL init process not done. Exiting')
         return 0
     print('Done! Connect with `mysql -h {0} -P {1} -uwordpress -pwordpress wordpress`'.format(docker_machine_ip, mysql_expose_port))
-
 
     if isfile(realpath(dump_file)):
         cmd = ''.join(['docker run -it --link sensei_wp_instance:mysql --rm mariadb sh -c \'',
